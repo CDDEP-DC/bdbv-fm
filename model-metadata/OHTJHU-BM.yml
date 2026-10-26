@@ -1,0 +1,19 @@
+team_name: "TODO full team name"
+team_abbr: "OHTJHU"
+model_name: "Foundation Model Ensemble with Delay Nowcast"
+model_abbr: "BM"
+model_contributors: [
+  {
+    "name": "TODO",
+    "affiliation": "Johns Hopkins University",
+    "email": "eklein@jhu.edu"
+  }
+]
+license: "CC0-1.0"
+model_details:
+  data_inputs: "Hub target data (weekly confirmed cases by onset week, all releases) and the hub's case-level onset-to-report delays by province."
+  methods: "Delay-adjusted nowcast of recent onset weeks, then a median ensemble of zero-shot time-series foundation models (Chronos-2, TimesFM 2.5, Moirai 2.0, Timestral) run on nowcast draws."
+  methods_long: "Recent onset weeks are incomplete when released (about a third of a week's cases are in by its end, 80% a week later). From the hub's case-level onset-to-report delays we rebuild the country and province counts as they would have stood on each past date (onset uniform within the week, plus a 1.5-day processing lag fit to the hub's real releases). On these pseudo-vintages we learn, for each of the 5 most recent weeks, a robust regression of log(final + 1) - log(reported + 1) on log reported size, with province effects shrunk toward zero (health zones use their province's) and a revision s.d. that is a power law in reported size. Where we submitted last week, that forecast is combined with the nowcast by precision weighting. We draw 50 joint nowcast trajectories (AR(1) correlated across weeks, never below the reported count). Chronos-2, TimesFM 2.5, Moirai 2.0-R-small and Timestral-209M each forecast every location on every draw, zero-shot, from the week after the data end through reference_date + 3 weeks. Their quantiles are mapped to a common 23-level grid and combined by the median across models, separately for each draw. Each of the 100 submitted trajectories takes its nowcast weeks from one draw and samples its future weeks from that draw's ensemble quantiles, joined over weeks by a Gaussian copula with AR(1) correlation 0.9. Locations are the country, provinces and health zones with a confirmed case in the last 8 weeks; levels are forecast independently, so health zones need not sum to provinces."
+model_version: "0.1.0"
+website_url: "TODO"
+ensemble_of_hub_models: false

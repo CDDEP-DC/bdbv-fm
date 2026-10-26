@@ -1,0 +1,17 @@
+# environments and caches
+.venv/
+__pycache__/
+*.egg-info/
+cache/
+logs/
+
+# backtests: keep only the evaluation tables
+backtests/*/*
+!backtests/*/evaluation/
+
+# nowcast test: row-level table is large; rebuild with `bdbv nowcast-test`
+forecasts/nowcast-test/rows.csv
+
+# local settings you don't want to share
+bdbv.local.toml
+.env

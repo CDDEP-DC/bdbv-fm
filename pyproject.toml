@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bdbv-fm"
+version = "0.1.0"
+description = "OHTJHU-BM: BDBV hub nowcasts and forecasts from an ensemble of time-series foundation models"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+classifiers = ["License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication"]
+dependencies = [
+    "numpy",
+    "pandas>=2.0",
+    "pyarrow",
+    "requests",
+    "torch>=2.4",
+]
+
+[project.optional-dependencies]
+# transformers 5 needs torch >= 2.6, but uni2ts (Moirai) pins torch < 2.5.
+chronos = ["chronos-forecasting>=2.1", "transformers>=4.41,<5"]
+timesfm = ["timesfm[torch]"]
+moirai = ["uni2ts @ git+https://github.com/SalesforceAIResearch/uni2ts.git"]
+timestral = ["timestral @ git+https://github.com/mistralai/timestral.git"]
+all = ["bdbv-fm[chronos,timesfm,moirai,timestral]"]
+
+[project.scripts]
+bdbv = "bdbv_fm.cli:main"
+
+[tool.setuptools]
+packages = ["bdbv_fm"]
+
+[tool.setuptools.package-data]
+bdbv_fm = ["report_template.html"]
