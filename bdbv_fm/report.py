@@ -18,6 +18,7 @@ import pandas as pd
 
 from . import config as C
 from . import evaluate
+from .nowcast import read_submission
 from .forecast import Result
 
 log = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ def _previous_medians(root: Path, ref: dt.date) -> pd.DataFrame:
     f = root / "model-output" / C.model_id() / f"{ref - dt.timedelta(weeks=1)}-{C.model_id()}.csv"
     if not f.exists():
         return pd.DataFrame(columns=["location", "target_end_date", "value"])
-    df = pd.read_csv(f, dtype={"location": str})
+    df = read_submission(f)
     return df.groupby(["location", "target_end_date"], as_index=False)["value"].median()
 
 

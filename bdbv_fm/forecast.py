@@ -38,7 +38,7 @@ _TRANSFORMS = {
     "sqrt": (np.sqrt, lambda x: np.square(np.maximum(x, 0))),
     "log1p": (np.log1p, np.expm1),
 }
-COLUMNS = ["reference_date", "target", "target_end_date", "location", "output_type", "output_type_id", "value"]
+COLUMNS = ["reference_date", "forecast_date", "target", "target_end_date", "location", "output_type", "output_type_id", "value"]
 
 
 def _z(levels) -> np.ndarray:
@@ -202,12 +202,20 @@ def trajectories(quantiles: dict, paths: dict, n_nowcast: int, n_paths: int, rng
 
 
 # ---------------------------------------------------------------------- output
-def make_frame(samples: dict, weeks, ref_date) -> pd.DataFrame:
+def forecast_date_for(ref_date: dt.date) -> dt.date:
+    """The forecast_date for a run made today: today in the hub's time zone. For a past reference date
+    (re-runs, backtests) today would be after the reference date, which the hub rejects, so use the
+    Sunday that opened that week's submission window."""
+    today = C.hub_today()
+    return today if today <= ref_date else ref_date - dt.timedelta(days=6)
+
+
+def make_frame(samples: dict, weeks, ref_date, forecast_date) -> pd.DataFrame:
     rows = []
     for loc, traj in samples.items():
         vals = np.rint(traj) if C.ROUND_SAMPLES else np.round(traj, 3)
         for i in range(traj.shape[0]):
-            rows += [(ref_date, C.TARGET, w.date(), loc, "sample", i + 1, float(v)) for w, v in zip(weeks, vals[i])]
+            rows += [(ref_date, forecast_date, C.TARGET, w.date(), loc, "sample", i + 1, float(v)) for w, v in zip(weeks, vals[i])]
     df = pd.DataFrame(rows, columns=COLUMNS)
     return df.sort_values(["location", "output_type_id", "target_end_date"], kind="stable").reset_index(drop=True)
 
@@ -217,6 +225,11 @@ def validate(df: pd.DataFrame, ref_date: dt.date, valid_locations) -> list[str]:
     problems = []
     if df.empty:
         return ["submission is empty"]
+    fdates = pd.to_datetime(df["forecast_date"])
+    if fdates.nunique() != 1:
+        problems.append(f"{fdates.nunique()} forecast_date values; a new submission must have exactly one")
+    if (fdates > pd.Timestamp(ref_date)).any():
+        problems.append("forecast_date after reference_date")
     ted = pd.to_datetime(df["target_end_date"])
     if (ted.dt.dayofweek != 5).any():
         problems.append("target_end_date values that are not Saturdays")
@@ -240,8 +253,10 @@ def validate(df: pd.DataFrame, ref_date: dt.date, valid_locations) -> list[str]:
 # ------------------------------------------------------------------------ main
 def run(ref_date: dt.date, frame: pd.DataFrame, as_of, locations: pd.DataFrame, models,
         vintages: dict | None = None, prior_dir: Path | None = None, pool: ModelPool | None = None,
-        active_only: bool = True) -> Result:
+        active_only: bool = True, forecast_date: dt.date | None = None) -> Result:
     """Build the submission for one reference date from one data version (`frame`, released `as_of`).
+
+    forecast_date: the submission's forecast_date column (default: forecast_date_for(ref_date)).
 
     vintages: {as_of: frame} past data versions, for the nowcast's revision model.
     prior_dir: folder holding earlier submissions (model-output/<model_id>/), for the nowcast prior.
@@ -294,7 +309,7 @@ def run(ref_date: dt.date, frame: pd.DataFrame, as_of, locations: pd.DataFrame, 
         submission = pd.DataFrame(columns=COLUMNS)
     else:
         samples["ensemble"] = trajectories(ensemble({n: components[n] for n in ran}), paths, n_nowcast, n_paths, rng)
-        submission = make_frame(samples["ensemble"], weeks, ref_date)
+        submission = make_frame(samples["ensemble"], weeks, ref_date, forecast_date or forecast_date_for(ref_date))
         problems = validate(submission, ref_date, locations["location"])
     return Result(ref_date, pd.Timestamp(as_of), submission, problems, warnings, last_obs, weeks, series, revised,
                   table, samples, ran)
@@ -322,5 +337,6 @@ def save(result: Result, root: Path) -> Path | None:
     path = root / "model-output" / C.model_id() / f"{ref}-{C.model_id()}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     result.submission.to_csv(path, index=False)
-    log.info("Wrote %s (%d rows, %d locations)", path, len(result.submission), result.submission["location"].nunique())
+    log.info("Wrote %s (%d rows, %d locations, forecast_date %s)", path, len(result.submission),
+             result.submission["location"].nunique(), result.submission["forecast_date"].iloc[0])
     return path

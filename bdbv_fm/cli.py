@@ -112,16 +112,23 @@ def cmd_submit(args) -> int:
     if not args.hub_dir:
         log.error("Set --hub-dir or BDBV_HUB_DIR to your local clone of your fork of the hub")
         return 2
-    if not args.yes:
-        if not sys.stdin.isatty():
-            log.error("Not a terminal; pass --yes to submit without confirmation")
-            return 2
-        report = args.out / "reports" / f"{ref}-report.html"
-        print(f"About to submit {csv.name} to {C.HUB_REPO}.\nReview report: {report.resolve().as_uri()}")
-        if input("Submit? [y/N] ").strip().lower() != "y":
-            print("Not submitted.")
-            return 1
-    submit.submit(csv, args.hub_dir, ref, args.include_metadata)
+    try:
+        fdate = submit.new_forecast_date(csv)
+    except submit.SubmissionError as e:
+        log.error("%s", e)
+        return 1
+    report = args.out / "reports" / f"{ref}-report.html"
+    print(f"About to submit {csv.name} (forecast_date {fdate}) to {C.HUB_REPO}.\n"
+          f"If the hub already has a file for {ref}, the new forecast is appended to it.\n"
+          f"Review report: {report.resolve().as_uri()}")
+    if input("Submit? [y/N] ").strip().lower() != "y":
+        print("Not submitted.")
+        return 1
+    try:
+        submit.submit(csv, args.hub_dir, ref, args.include_metadata)
+    except submit.SubmissionError as e:
+        log.error("%s", e)
+        return 1
     return 0
 
 
@@ -164,7 +171,6 @@ def main(argv=None) -> int:
     s.add_argument("--out", type=Path, default=C.FORECAST_DIR)
     s.add_argument("--hub-dir", type=Path, default=os.environ.get("BDBV_HUB_DIR"))
     s.add_argument("--include-metadata", action="store_true", help="also submit model-metadata/<model>.yml")
-    s.add_argument("--yes", action="store_true", help="don't ask for confirmation")
     s.set_defaults(func=cmd_submit)
 
     args = p.parse_args(argv)

@@ -3,7 +3,6 @@
 __pycache__/
 *.egg-info/
 cache/
-logs/
 
 # backtests: keep only the evaluation tables
 backtests/*/*

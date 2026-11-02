@@ -211,6 +211,15 @@ def fit_revisions(vintages, as_of, offset, kind: str = "constant") -> dict[int, 
     return models
 
 
+def read_submission(path: Path, **kwargs) -> pd.DataFrame:
+    """A model-output file, keeping only its newest forecast if it holds several (one per forecast_date,
+    after resubmissions in the same week). Older files without forecast_date are read whole."""
+    df = pd.read_csv(path, dtype={"location": str}, **kwargs)
+    if "forecast_date" in df.columns and df["forecast_date"].nunique() > 1:
+        df = df[df["forecast_date"] == df["forecast_date"].max()]
+    return df
+
+
 def prior_forecasts(prior_dir: Path | None, ref_date, dates, offset: float) -> dict:
     """{(location, date): (mu, sd)} on the log scale, from last week's submitted samples for these weeks."""
     out = {}
@@ -220,7 +229,7 @@ def prior_forecasts(prior_dir: Path | None, ref_date, dates, offset: float) -> d
     f = Path(prior_dir) / "model-output" / C.model_id() / f"{prev.date()}-{C.model_id()}.csv"
     if not f.exists():
         return out
-    sub = pd.read_csv(f, dtype={"location": str}, parse_dates=["target_end_date"])
+    sub = read_submission(f, parse_dates=["target_end_date"])
     sub = sub[sub["target_end_date"].isin(pd.DatetimeIndex(dates))]
     for (loc, d), g in sub.groupby(["location", "target_end_date"]):
         lq = np.log(np.quantile(g["value"].clip(lower=0), [0.25, 0.5, 0.75]) + offset)

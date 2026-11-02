@@ -18,6 +18,18 @@ bdbv forecast     # nowcast + models + ensemble -> submission file + review repo
 bdbv submit       # opens a pull request to the hub (asks for confirmation)
 ```
 
+Run `bdbv submit` on the same day as `bdbv forecast` (or the next day). Each file carries a
+`forecast_date`, the day the forecast was made (Kinshasa time), and the hub rejects one that is
+more than a day from the day the pull request is validated. `bdbv submit` refuses a stale file;
+rerun `bdbv forecast`.
+
+**Updating a forecast later in the week.** Run `bdbv forecast` and `bdbv submit` again on a later
+day. If the hub's main branch already has this week's file, `bdbv submit` appends the new rows
+(new `forecast_date`) to it and leaves every existing row unchanged, as the hub requires. Each
+pull request adds exactly one new `forecast_date`, so a second forecast on the same day is
+refused. Rerunning before the first pull request is merged replaces that pull request's contents
+instead. The local file in `forecasts/model-output/` always holds only the latest run.
+
 The hub accepts submissions **Sunday to Tuesday** (Kinshasa time, UTC+1) of the week ending on the
 `reference_date` Saturday. The target data are released with an `as_of` date. The 2026-10-17
 release was committed on Tuesday 2026-10-20, so check the hub before running. If `bdbv forecast`
@@ -30,6 +42,7 @@ probably isn't posted yet.
 |---|---|
 | target | `wk inc confirmed cases`: confirmed cases by **week of symptom onset** |
 | output | 100 sample trajectories per location (`output_type = sample`) |
+| `forecast_date` | the run date in Kinshasa time (for a past reference date: that week's Sunday) |
 | weeks | the last 5 weeks in the data (nowcasts) through `reference_date` + 3 weeks |
 | locations | `CD`, plus provinces and health zones with a case in the last 8 weeks (~60) |
 
@@ -122,8 +135,7 @@ uv pip install -e ".[all]"
 bdbv --help
 ```
 
-`scripts/weekly.ps1` uses `.venv`, or the conda env `bdbv` if there is no `.venv`. If you already
-have a working flusight env, `pip install -e .` into it also works: the model dependencies are
+If you already have a working flusight env, `pip install -e .` into it also works: the model dependencies are
 identical.
 
 | variable | needed for |
@@ -144,10 +156,6 @@ git -C C:\code\BDBV-Modeling-Hub remote add upstream https://github.com/InsightN
 `bdbv submit --include-metadata` the first time. The team and model abbreviations are set in
 `bdbv_fm/config.py` (`TEAM_ABBR`, `MODEL_ABBR`). They default to flusight-fm's `OHTJHU-BM`; change
 both there and in the metadata file name if you want a different id for this hub.
-
-**Running it automatically**: `.github/workflows/weekly.yml` runs Mondays 14:00 UTC. With
-Task Scheduler:
-`schtasks /Create /TN BDBV /SC WEEKLY /D MON /ST 10:00 /TR "powershell -File C:\timeseries\bdbv-fm\scripts\weekly.ps1"`
 
 ## Other commands
 
@@ -211,6 +219,5 @@ bdbv_fm/             the package (cli, data, nowcast, nowcast_test, models, fore
 forecasts/           weekly outputs (tracked)
 backtests/<name>/    backtest outputs (only evaluation/ is tracked)
 model-metadata/      hub metadata file
-scripts/             weekly run scripts for Windows and macOS/Linux
 cache/               downloads (not tracked)
 ```

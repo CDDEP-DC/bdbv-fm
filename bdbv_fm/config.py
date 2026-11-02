@@ -11,9 +11,11 @@ See README.md ("Tuning") for which settings matter most.
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 import tomllib
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -31,6 +33,7 @@ TARGET_PATH = "target-data/time-series.csv"
 DELAYS_PATH = "auxiliary-data/weekly-reporting-delays-by-province.csv"
 DAILY_PATH = "auxiliary-data/daily-confirmed-case.csv"
 LOCATIONS_PATH = "auxiliary-data/locations.csv"
+HUB_TZ = "Africa/Kinshasa"  # the hub checks forecast_date against today's date here (+/- 1 day)
 
 # --------------------------------------------------------------------- targets
 TARGET = "wk inc confirmed cases"
@@ -98,6 +101,11 @@ LOG_OFFSET = 1.0            # offset in log(value + offset)
 
 def model_id() -> str:
     return f"{TEAM_ABBR}-{MODEL_ABBR}"
+
+
+def hub_today() -> dt.date:
+    """Today's date in the hub's time zone."""
+    return dt.datetime.now(ZoneInfo(HUB_TZ)).date()
 
 
 def hub_raw(path: str, ref: str | None = None) -> str:
