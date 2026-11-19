@@ -9,10 +9,13 @@ description = "OHTJHU-BM: BDBV hub nowcasts and forecasts from an ensemble of ti
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 classifiers = ["License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication"]
+# numpy<2 and the exact pyarrow pin match the known-working env. torch 2.4 (capped
+# by uni2ts) is built against numpy 1.x, and an unpinned pyarrow resolved to a
+# broken build when the venv was rebuilt.
 dependencies = [
-    "numpy",
+    "numpy<2",
     "pandas>=2.0",
-    "pyarrow",
+    "pyarrow==23.0.1",
     "requests",
     "torch>=2.4",
 ]

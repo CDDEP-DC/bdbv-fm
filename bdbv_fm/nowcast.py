@@ -28,7 +28,8 @@ on log(value + offset):
    one. It is weighted by precision and scaled by PRIOR_WEIGHT.
 
 The result is sampled as NOWCAST_PATHS trajectories (errors correlated NOWCAST_RHO
-between adjacent weeks, never below what is already reported when NOWCAST_FLOOR). The
+between adjacent weeks; with NOWCAST_FLOOR, the newest NOWCAST_FLOOR_LAGS weeks are never
+below what is already reported, while older weeks may be revised down). The
 models are then run on each path, so nowcast uncertainty carries into the forecast.
 `bdbv nowcast-test` replays all of this on past dates and scores it.
 """
@@ -48,6 +49,11 @@ log = logging.getLogger(__name__)
 GROWTH_CLIP = 1.5      # |log week-over-week change| beyond this is treated as this
 CALIBRATION = 0.8      # the s.d. is scaled so this share of past revisions falls in the central interval
 MODEL_KINDS = ("none", "constant", "size", "size+growth")
+
+
+def floor_applies(lag) -> np.ndarray:
+    """Whether a nowcast at this lag (0 = newest week) is kept at or above the reported count."""
+    return C.NOWCAST_FLOOR & (np.asarray(lag) < C.NOWCAST_FLOOR_LAGS)
 
 
 def _growth(rep, prev, offset):
@@ -143,6 +149,7 @@ class LagModel:
     var: tuple = (C.NOWCAST_FALLBACK_SD ** 2, 0.0)   # (c, k): variance = c * ((report + offset) / offset)^(-2k)
     scale: float = 1.0
     n: int = 0
+    group: str = "location"          # loc_effect keys: "location" codes, or "level" (country/province/health zone)
 
     def _design(self, rep, growth) -> np.ndarray:
         rep, growth = np.atleast_1d(np.asarray(rep, float)), np.atleast_1d(np.asarray(growth, float))
@@ -197,10 +204,49 @@ def fit_lag(g: pd.DataFrame, kind: str, offset: float, variance: str | None = No
 
 
 
-def fit_revisions(vintages, as_of, offset, kind: str = "constant") -> dict[int, LagModel]:
-    """{lag: LagModel} learned from data versions available on `as_of`."""
+def fit_real_revisions(real: dict, as_of, offset, level: dict) -> dict[int, LagModel]:
+    """{lag: LagModel} for lags REAL_LAGS_FROM and older, learned from the hub's real releases.
+
+    Each past release's report is compared with the release of `as_of` (the current data), using only weeks at
+    least REAL_SETTLE_WEEKS old in it. The shift is a constant per lag plus a per-level effect (country, province,
+    health zone), shrunk toward the pooled value, and the s.d. is a power law in the report's size, as for the
+    pseudo-vintage model. There are too few releases for per-location effects. Lags without at least 20 rows
+    are left out (the pseudo-vintage model is used for them)."""
+    as_of = pd.Timestamp(as_of)
+    truth = real.get(as_of)
+    if truth is None or C.REAL_LAGS_FROM >= C.NOWCAST_WEEKS:
+        return {}
+    past = {r: v for r, v in real.items() if pd.Timestamp(C.REAL_REVISION_START) <= r < as_of}
+    if not past:
+        return {}
+    errs = revision_errors(past, as_of, offset, truth=truth, settle=C.REAL_SETTLE_WEEKS)
+    errs = errs[errs["lag"] >= C.REAL_LAGS_FROM]
+    errs = errs.assign(location=errs["location"].map(level).fillna("other"))
+    models = {}
+    for lag, g in errs.groupby("lag"):
+        if len(g) >= 20:
+            m = fit_lag(g, "constant", offset)
+            m.group = "level"
+            models[int(lag)] = m
+    return models
+
+
+def fit_revisions(vintages, as_of, offset, kind: str = "constant", real: dict | None = None,
+                  level: dict | None = None) -> dict[int, LagModel]:
+    """{lag: LagModel} learned from data versions available on `as_of`.
+
+    With `real` (the hub's releases up to and including `as_of`) and `level` ({location: location_type}),
+    lags REAL_LAGS_FROM and older use fit_real_revisions where it has enough history."""
     errs = revision_errors(vintages, as_of, offset)
     models = {int(lag): fit_lag(g, kind, offset) for lag, g in errs.groupby("lag") if len(g) >= 20}
+    if real is not None and level is not None:
+        from_real = fit_real_revisions(real, as_of, offset, level)
+        models.update(from_real)
+        if from_real:
+            log.info("Lags %s corrected from real releases: %s", sorted(from_real), "; ".join(
+                f"lag {k} [" + ", ".join(f"{g}: x{np.exp(m.beta[0] + m.loc_effect.get(g, 0)):.2f}"
+                                         for g in ("country", "province", "health zone")) + f"] n={m.n}"
+                for k, m in from_real.items()))
     if models:
         def show(m: LagModel):
             sizes = [s for s in (3, 30, 300) if np.log(s + offset) <= m.size_range[1]] or [3]
@@ -238,22 +284,44 @@ def prior_forecasts(prior_dir: Path | None, ref_date, dates, offset: float) -> d
 
 
 def nowcast(series: dict[str, pd.Series], models: dict[int, LagModel], prior: dict, offset: float,
-            parent: dict | None = None, adjust: bool = True):
-    """Returns (revised series at the nowcast medians, table of nowcasts for the last NOWCAST_WEEKS weeks)."""
-    parent = parent or {}
+            parent: dict | None = None, adjust: bool = True, level: dict | None = None):
+    """Returns (revised series at the nowcast medians, table of nowcasts for the last NOWCAST_WEEKS weeks).
+
+    level: {location: location_type}, for lag models fit by level (fit_real_revisions) and NOWCAST_HZ_SHIFT."""
+    parent, level = parent or {}, level or {}
     rows, revised = [], {}
+
+    def own_shift(loc, s, lag, m):
+        rep = float(s.iloc[-1 - lag])
+        prev = float(s.iloc[-2 - lag]) if len(s) > lag + 1 else np.nan
+        growth = float(_growth(rep, prev, offset))
+        if m is None or not adjust:
+            return 0.0, growth
+        if m.group == "level":
+            effect_loc = level.get(loc, "other")
+        else:
+            effect_loc = loc if loc in m.loc_effect else parent.get(loc, loc)
+        return float(m.mean(rep, growth, [effect_loc])[0]), growth
+
     for loc, s in series.items():
         s2 = s.copy()
         for lag in range(min(C.NOWCAST_WEEKS, len(s))):
             d, rep = s.index[-1 - lag], float(s.iloc[-1 - lag])
-            prev = float(s.iloc[-2 - lag]) if len(s) > lag + 1 else np.nan
             m = models.get(lag)
-            growth = float(_growth(rep, prev, offset))
-            if m is not None and adjust:
-                effect_loc = loc if loc in m.loc_effect else parent.get(loc, loc)
-                shift = float(m.mean(rep, growth, [effect_loc])[0])
-            else:
-                shift = 0.0
+            shift, growth = own_shift(loc, s, lag, m)
+            # Health zones have no revision data of their own, and the size curve learned on provinces gives
+            # small counts too big a shift. Optionally borrow the parent province's shift (see NOWCAST_HZ_SHIFT).
+            pa = parent.get(loc)
+            if (C.NOWCAST_HZ_SHIFT != "own" and lag >= C.NOWCAST_HZ_SHIFT_FROM_LAG
+                    and level.get(loc) == "health zone" and pa in series
+                    and m is not None and m.group == "location" and adjust and rep > 0):
+                pshift, _ = own_shift(pa, series[pa], lag, m)
+                if C.NOWCAST_HZ_SHIFT == "parent":
+                    shift = pshift
+                elif C.NOWCAST_HZ_SHIFT == "parent_mult":   # scale the count, not count + offset
+                    shift = float(np.log(rep * np.exp(pshift) + offset) - np.log(rep + offset))
+                else:
+                    raise ValueError(f"unknown NOWCAST_HZ_SHIFT {C.NOWCAST_HZ_SHIFT!r}")
             sd = float(m.sd(rep)[0]) if m is not None else C.NOWCAST_FALLBACK_SD
             mu = np.log(rep + offset) + shift
             p = prior.get((loc, d)) if adjust else None
@@ -261,7 +329,7 @@ def nowcast(series: dict[str, pd.Series], models: dict[int, LagModel], prior: di
                 pm, psd = p[0], p[1] / np.sqrt(C.PRIOR_WEIGHT)
                 prec = 1 / sd**2 + 1 / psd**2
                 mu, sd = (mu / sd**2 + pm / psd**2) / prec, np.sqrt(1 / prec)
-            med = max(float(np.exp(mu) - offset), rep if C.NOWCAST_FLOOR else 0.0, 0.0)
+            med = max(float(np.exp(mu) - offset), rep if floor_applies(lag) else 0.0, 0.0)
             if adjust:
                 s2.loc[d] = med
             rows.append(dict(location=loc, date=d, lag=lag, reported=rep, median=med, mu=mu, sd=sd, shift=shift,
@@ -288,7 +356,7 @@ def sample_paths(series: dict[str, pd.Series], table: pd.DataFrame, n: int, offs
             for j in range(1, k):
                 z[:, j] = C.NOWCAST_RHO * z[:, j - 1] + np.sqrt(1 - C.NOWCAST_RHO**2) * rng.standard_normal(n)
             v = np.exp(g["mu"].to_numpy() + z * g["sd"].to_numpy()) - offset
-            floor = g["reported"].to_numpy() if C.NOWCAST_FLOOR else 0.0
-            paths[:, -k:] = np.maximum(v, np.maximum(floor, 0.0))
+            floor = np.where(floor_applies(g["lag"].to_numpy()), g["reported"].to_numpy(float), 0.0)
+            paths[:, -k:] = np.maximum(v, floor)
         out[loc] = paths
     return out

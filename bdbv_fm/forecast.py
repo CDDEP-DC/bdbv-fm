@@ -253,13 +253,14 @@ def validate(df: pd.DataFrame, ref_date: dt.date, valid_locations) -> list[str]:
 # ------------------------------------------------------------------------ main
 def run(ref_date: dt.date, frame: pd.DataFrame, as_of, locations: pd.DataFrame, models,
         vintages: dict | None = None, prior_dir: Path | None = None, pool: ModelPool | None = None,
-        active_only: bool = True, forecast_date: dt.date | None = None) -> Result:
+        active_only: bool = True, forecast_date: dt.date | None = None, real: dict | None = None) -> Result:
     """Build the submission for one reference date from one data version (`frame`, released `as_of`).
 
     forecast_date: the submission's forecast_date column (default: forecast_date_for(ref_date)).
 
     vintages: {as_of: frame} past data versions, for the nowcast's revision model.
     prior_dir: folder holding earlier submissions (model-output/<model_id>/), for the nowcast prior.
+    real: {as_of: frame} the hub's real releases up to `as_of`, for the older nowcast weeks (REAL_LAGS_FROM).
     """
     pool = pool or ModelPool()
     warnings: list[str] = []
@@ -279,13 +280,14 @@ def run(ref_date: dt.date, frame: pd.DataFrame, as_of, locations: pd.DataFrame, 
                         "this week's data release may not be posted yet")
 
     if C.NOWCAST:
-        rev = nc.fit_revisions(vintages or {}, as_of, offset, C.NOWCAST_MODEL)
+        level = dict(zip(locations["location"], locations["location_type"]))
+        rev = nc.fit_revisions(vintages or {}, as_of, offset, C.NOWCAST_MODEL, real=real, level=level)
         if 0 not in rev:
             warnings.append("no revision model for the latest week; it is submitted as reported, which is "
                             "far too low (check the delay data and NOWCAST_SOURCE)")
         dates = [last_obs - pd.Timedelta(weeks=k) for k in range(C.NOWCAST_WEEKS)]
         prior = nc.prior_forecasts(prior_dir, ref_date, dates, offset)
-        revised, table = nc.nowcast(series, rev, prior, offset, parent)
+        revised, table = nc.nowcast(series, rev, prior, offset, parent, level=level)
         n_paths = C.NOWCAST_PATHS
         paths = nc.sample_paths(series, table, n_paths, offset, rng)
         n_nowcast = min(C.NOWCAST_WEEKS, min(len(s) for s in series.values()))

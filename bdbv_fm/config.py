@@ -77,15 +77,34 @@ NOWCAST_WEEKS = 5           # how many of the most recent reported weeks to revi
 NOWCAST_MODEL = "size"      # "none", "constant", "size" or "size+growth" (see nowcast.py). "size+growth" did
                             # best on country/province pseudo-vintages but badly on health zones, whose
                             # week-over-week changes are mostly noise (`bdbv nowcast-test`, 2026-10-25)
-NOWCAST_SD_SCALE = 1.3      # widen (>1) the nowcast intervals: in-sample calibration under-covers out of
+NOWCAST_HZ_SHIFT = "parent_mult"  # health zone revision shift: "own" (the size curve at the zone's own count, with its
+                            # province's effect), "parent" (the parent province's shift) or "parent_mult" (the parent's
+                            # shift as a multiplier on the zone's count). Zones reported as 0 always use "own". "own"
+                            # overshot small zones at lag 1 (bias +0.15; +0.3 for 1-5 cases): the province size curve
+                            # gives small counts too big a shift. "parent_mult" from lag 1: lag-1 CRPS 0.253 -> 0.214,
+                            # bias -0.04, lags 2-4 slightly better (`bdbv nowcast-test`, 2026-11-19)
+NOWCAST_HZ_SHIFT_FROM_LAG = 1  # ... applied from this lag back; at lag 0 "own" scored better (0.468 vs 0.494)
+NOWCAST_SD_SCALE = 1.3     # widen (>1) the nowcast intervals: in-sample calibration under-covers out of
                             # sample (90% intervals held 76-79%); 1.3 gives 84-90% (`bdbv nowcast-test`)
 NOWCAST_VARIANCE = "power"  # revision s.d. shrinks as a power of the report's size; "constant" = one s.d. per lag
 NOWCAST_SOURCE = "pseudo"   # vintages to learn revisions from: "pseudo" (rebuilt from delays), "real" (hub as_of
                             # versions), or "both". Switch to "both" once there are ~8 weekly real versions.
 NOWCAST_PATHS = 50          # nowcast trajectories the models are run on (samples reuse them round-robin)
 NOWCAST_RHO = 0.5           # correlation of nowcast errors between adjacent weeks within a trajectory
-NOWCAST_FLOOR = True        # a nowcast sample is never below the count already reported
-PIPELINE_LAG_DAYS = 1.5     # days from a case's report to its appearance in the hub data (fit to the real
+NOWCAST_FLOOR = True        # a nowcast sample is never below the count already reported ...
+NOWCAST_FLOOR_LAGS = 5      # ... in the newest this many weeks. Older weeks are often revised down in the real
+                            # releases (15-30% of province/health zone values at lags 3-4), but about half of health
+                            # zone values never change, and the floor's point mass on the report scored better: 2
+                            # (floor on lags 0-1 only) raised 90% coverage but worsened health zone CRPS at lags 2-4
+                            # (0.093 -> 0.102; `bdbv nowcast-test`, 2026-11-19). Retest as releases accumulate.
+REAL_LAGS_FROM = 5          # weeks this far back and older are corrected from the hub's real releases instead of
+                            # pseudo-vintages (5 = NOWCAST_WEEKS: off). Real releases keep revising old weeks
+                            # (reassignment and cleanup, often downward) for 2+ months, which the delay data can't
+                            # show. Tested at 2 on 2026-11-19 with 3 usable releases: better coverage but worse CRPS
+                            # at lags 2-4 (health zones 0.093 -> 0.109). Retest with `real_lags_from = 2` in bdbv.toml.
+REAL_REVISION_START = "2026-10-17"  # earliest real release used (the imputation method changed from 10-24 data on)
+REAL_SETTLE_WEEKS = 4       # a week serves as "final" once it is this many weeks old in the current release
+PIPELINE_LAG_DAYS = 1.5    # days from a case's report to its appearance in the hub data (fit to the real
                             # releases of 2026-08-18 and 2026-10-09; recheck as releases accumulate)
 PSEUDO_WEEKS = 20           # how many weekly pseudo-vintages to rebuild
 AS_OF_LAG_DAYS = 14         # backtests: days from the data's as_of to the reference date (2026-10-17 -> 10-31)

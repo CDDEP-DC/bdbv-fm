@@ -27,6 +27,7 @@ from .forecast import build_series
 
 log = logging.getLogger(__name__)
 Z = {p: NormalDist().inv_cdf(0.5 + p / 2) for p in (0.5, 0.9)}
+TRUTH_MIN_AGE_WEEKS = 3   # real releases: score only weeks this old in the latest data (~95% reported by then)
 
 
 def _crps_normal(mu, sd, y):
@@ -46,9 +47,10 @@ def _score(table: pd.DataFrame, final: pd.Series) -> pd.DataFrame:
     t["raw_abs_err"] = (np.log(t["reported"] + off) - y).abs()
     t["bias"] = np.log(t["median"] + off) - y
     t["crps_log"] = _crps_normal(t["mu"].to_numpy(), t["sd"].to_numpy(), y.to_numpy())
+    floor = np.where(nc.floor_applies(t["lag"].to_numpy()), t["reported"].to_numpy(float), 0.0)
     for p, z in Z.items():
-        lo = np.maximum(np.exp(t["mu"] - z * t["sd"]) - off, t["reported"] if C.NOWCAST_FLOOR else 0)
-        hi = np.maximum(np.exp(t["mu"] + z * t["sd"]) - off, t["reported"] if C.NOWCAST_FLOOR else 0)
+        lo = np.maximum(np.exp(t["mu"] - z * t["sd"]) - off, floor)
+        hi = np.maximum(np.exp(t["mu"] + z * t["sd"]) - off, floor)
         t[f"cov{int(p * 100)}"] = ((lo <= t["truth"] + 1e-9) & (t["truth"] <= hi + 1e-9)).astype(float)
     return t
 
@@ -60,6 +62,7 @@ def run(out: Path, kinds=nc.MODEL_KINDS) -> Path:
     delays = data.load_delays(locations)
     final_s = final.drop_duplicates(["location", "date"], keep="last").set_index(["location", "date"])["value"]
     parent = dict(zip(locations["location"], locations["parent"]))
+    level_of = dict(zip(locations["location"], locations["location_type"]))
 
     n = (latest_as_of - pd.Timestamp(C.REVISION_START)).days // 7
     pseudo = data.pseudo_vintages(delays, final, latest_as_of, n_weeks=n)
@@ -75,9 +78,11 @@ def run(out: Path, kinds=nc.MODEL_KINDS) -> Path:
         own = {"pseudo": same_day, "real": real, "both": same_day | real}[C.NOWCAST_SOURCE]
         train = {r: v for r, v in own.items() if r < a} | {a: frame}
         series, _, _ = build_series(frame, locations, active_only=source == "real")
+        # older lags from earlier real releases, as in production (pseudo-vintage dates predate most releases)
+        real_train = {r: v for r, v in real.items() if r <= a} if source == "real" else None
         for kind in kinds:
-            models = nc.fit_revisions(train, a, C.LOG_OFFSET, kind)
-            _, table = nc.nowcast(series, models, {}, C.LOG_OFFSET, parent)
+            models = nc.fit_revisions(train, a, C.LOG_OFFSET, kind, real=real_train, level=level_of)
+            _, table = nc.nowcast(series, models, {}, C.LOG_OFFSET, parent, level=level_of)
             if table.empty:
                 continue
             level = table["location"].map(dict(zip(locations["location"], locations["location_type"])))
@@ -87,6 +92,11 @@ def run(out: Path, kinds=nc.MODEL_KINDS) -> Path:
         raise RuntimeError("no versions to test; is there enough history after REVISION_START?")
     df = pd.concat(rows, ignore_index=True)
     df = df[(df["reported"] > 0) | (df["truth"] > 0)]
+    # Real releases run up to last week, so their newest weeks are still filling in in the latest data and
+    # would make every nowcast look too high. Score only weeks at least TRUTH_MIN_AGE_WEEKS old there.
+    # (Pseudo-vintage dates already stop REVISION_SETTLE_WEEKS before the latest data.)
+    young = final["date"].max() - pd.Timedelta(weeks=TRUTH_MIN_AGE_WEEKS)
+    df = df[(df["source"] == "pseudo") | (df["date"] <= young)]
     # Score only versions where a revision model could be fit at every lag (early in the outbreak there
     # was too little settled history); the others just show the raw report.
     fitted = df[df["kind"] == "constant"].groupby(["source", "as_of"])["n_revisions"].min()

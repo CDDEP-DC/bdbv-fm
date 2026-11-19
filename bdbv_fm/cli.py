@@ -50,7 +50,8 @@ def cmd_forecast(args) -> int:
     else:
         as_of, frame = data.latest(target)
     vintages = data.nowcast_vintages(target, data.load_delays(locations), as_of) if C.NOWCAST else {}
-    result = forecast.run(ref, frame, as_of, locations, args.models or C.MODELS, vintages, prior_dir=args.out)
+    result = forecast.run(ref, frame, as_of, locations, args.models or C.MODELS, vintages, prior_dir=args.out,
+                          real={a: v for a, v in real.items() if a <= as_of})
     for w in result.warnings:
         log.warning(w)
     path = forecast.save(result, args.out)

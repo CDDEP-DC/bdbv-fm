@@ -65,35 +65,68 @@ holds one row per case with its onset week and onset-to-report delay. From it, `
   reported.
 - Both choices were fit to the real releases of 2026-08-18 and 2026-10-09. A simpler "mid-week
   onset" rule undercounted partial weeks by about 2×.
+- The hub now archives each week's delay file (`auxiliary-data/archived-delay-data/`). Checked
+  against the 10-24, 11-01 and 11-08 snapshots, the pseudo-vintages match the observed-onset counts
+  to within 5% from one week back. In the newest week they are 5–25% too high. A 2-day lag fits
+  the snapshots better, but in `nowcast-test` it overcorrected the newest week, so 1.5 is kept.
 
 `nowcast.py` (adapted from flusight-fm) then learns, for each of the 5 most recent weeks:
 - the log revision as a robust regression on the report's log size, with province effects shrunk
-  toward zero (health zones use their province's);
+  toward zero;
 - a revision s.d. that shrinks as a power of the report's size.
+
+Health zones have no delay data. In the newest week they use the province curve at their own count.
+From one week back they take their parent province's shift, applied as a multiplier on the count
+(`NOWCAST_HZ_SHIFT = "parent_mult"`). Evaluating the province curve at a small count overshot
+zones reporting 1–5 cases by about 30% one week back, when about half of them never get another case.
 
 It combines that with last week's forecast for the same week, if there is one, and draws 50 joint
 nowcast trajectories that are never below the reported count.
 
-`bdbv nowcast-test` replays all of this out of sample. Results from the 2026-10-25 run, as log-scale
-CRPS (lower is better):
+`bdbv nowcast-test` replays all of this out of sample. Results from the 2026-11-19 run, as log-scale
+CRPS (lower is better). Real releases are scored only on weeks at least 3 weeks old in the latest data:
 
 | | newest week | 1 week back | 2 weeks back |
 |---|---|---|---|
-| report as-is: pseudo-vintages (country + provinces) | 0.90 | 0.23 | 0.09 |
-| **nowcast: pseudo-vintages** | **0.24** | **0.13** | 0.10 |
-| report as-is: real releases (all levels) | 1.24 | 0.39 | 0.19 |
-| **nowcast: real releases** | **0.50** | **0.27** | 0.17 |
+| report as-is: pseudo-vintages (country + provinces) | 0.75 | 0.18 | 0.08 |
+| **nowcast: pseudo-vintages** | **0.18** | **0.12** | 0.08 |
+| report as-is: real releases (all levels) | 1.04 | 0.34 | 0.18 |
+| **nowcast: real releases** | **0.46** | **0.21** | **0.15** |
 
-- For the country, the newest week's error drops from a factor of about 20 (log error 3.0) to about 30% (0.1–0.3).
+- For the country, on real releases, the newest week's error drops from a factor of about 12 to
+  about 40% (4 releases).
 - `size+growth`, the model flusight-fm uses, scored slightly better on the country and provinces
   but much worse on health zones, whose week-over-week changes are mostly noise. That is why the
   default is `size`.
-- In-sample calibration under-covered out of sample, so the nowcast s.d. is scaled by 1.3. That
-  brings 90% intervals to 84–90% coverage.
-- Two weeks back and older, the shift barely matters either way.
+- In-sample calibration under-covered out of sample, so the nowcast s.d. is scaled by 1.3.
+  On real releases, 90% intervals cover 80–90% for health zones but only 56–70% for provinces.
+- On health zones, `parent_mult` cut CRPS one week back from 0.25 to 0.21 and improved it in
+  every release tested.
 
-Re-run `bdbv nowcast-test` every few weeks. Once there are about 8 weekly real releases, try
-`nowcast_source = "both"`.
+**Real releases keep revising weeks for 2+ months.** From about 3 weeks back, the changes come
+from cases being reassigned or cleaned up, not from late reports, and they often go *down*:
+- 15–30% of province and health zone values at 3–4 weeks back are later revised down;
+- the country count drifts down 1–2% at 5–12 weeks back;
+- about 40% of health zone values still change at 9–12 weeks back, with no net direction.
+
+The delay data cannot show these changes. That is the main reason province intervals under-cover
+from 2 weeks back. Two remedies were tested on 2026-11-19 and both are **off** by default. Each
+widened the intervals but scored worse, because about half of health zone values never change, and
+a tight distribution resting on the report wins on those:
+
+| setting | what it does | health zone CRPS, 2–4 weeks back |
+|---|---|---|
+| (default) | | **0.093** |
+| `nowcast_floor_lags = 2` | lets samples from 2 weeks back fall below the report | 0.102 |
+| `real_lags_from = 2` | learns the shift and s.d. from 2 weeks back from real releases, by level | 0.109 |
+
+These scores are from the releases since 10-24, the only ones the second remedy can be fit on.
+Only three releases could be used, so retest both as releases accumulate.
+`nowcast_source = "both"` (pseudo-vintages and real releases pooled) also made health zones worse
+(newest-week bias +0.33) and stays off.
+
+Re-run `bdbv nowcast-test` every few weeks, and retest the settings above in a scratch config:
+`bdbv --config scratch.toml nowcast-test --out <folder>`.
 
 ## How the forecast is built
 
@@ -184,7 +217,10 @@ example `nowcast_paths = 20` for a faster run. The ones that matter most:
 | `NOWCAST_MODEL` | `size` | revision model; compare with `bdbv nowcast-test` |
 | `NOWCAST_SD_SCALE` | 1.3 | widens nowcast intervals; check 90% coverage in `nowcast-test` |
 | `PIPELINE_LAG_DAYS` | 1.5 | report-to-data lag for pseudo-vintages; refit as real releases accumulate |
-| `NOWCAST_SOURCE` | `pseudo` | `both` once ~8 weekly real releases exist |
+| `NOWCAST_SOURCE` | `pseudo` | `both` scored worse on health zones (2026-11-19) |
+| `NOWCAST_HZ_SHIFT` | `parent_mult` | health zone shift from 1 week back (`NOWCAST_HZ_SHIFT_FROM_LAG`); `own` is the old rule |
+| `NOWCAST_FLOOR_LAGS` | 5 | weeks kept at or above the report; 2 lets older weeks revise down |
+| `REAL_LAGS_FROM` | 5 (off) | from this lag back, learn revisions from real releases; retest at 2 |
 | `REVISION_WINDOW_WEEKS` | 16 | delays are shortening over time; a shorter window adapts faster |
 | `NOWCAST_PATHS` | 50 | model runs per location; lower it for speed, raise it for smoother samples |
 | `ACTIVE_WEEKS`, `LEVELS` | 8, all | which locations are submitted |
@@ -192,6 +228,12 @@ example `nowcast_paths = 20` for a faster run. The ones that matter most:
 | `TRAJ_RHO` | 0.9 | week-to-week correlation inside a trajectory |
 
 ## Known limitations and next steps
+
+- **`wk R_t` is not submitted.** The hub added an optional target on 2026-11-18: the effective
+  reproduction number for the reference week, as 23 quantiles per location. It could be derived from
+  the case trajectories with a renewal equation.
+- **Provinces' newest week runs low.** On real releases the log bias is −0.41 (18 values). This is
+  the largest remaining nowcast error.
 
 - **Levels are not coherent.** Health zones don't sum to their province, nor provinces to the
   country. The hub doesn't require it, but reconciling them (e.g. scaling health zone samples to

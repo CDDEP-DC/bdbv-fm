@@ -114,6 +114,17 @@ def vintage_for(vintages: dict, day) -> tuple[pd.Timestamp, pd.DataFrame] | tupl
     return a, vintages[a]
 
 
+def last_data_week(as_of) -> pd.Timestamp:
+    """The newest onset week (Saturday) in a release made on `as_of`.
+
+    A week first appears once at least one full day of it has passed, so a release on a Saturday ends
+    with that Saturday's week, and one on a Sunday ends with the week that closed the day before (the
+    new week has no cases yet). Matches every real release so far (Tue 08-18, Fri 10-09, Sat 10-17,
+    Sat 10-24, Sun 11-01). Getting this wrong shifts every pseudo-vintage lag by one week.
+    """
+    return pd.Timestamp(reference_date_for((pd.Timestamp(as_of) - pd.Timedelta(days=1)).date()))
+
+
 def known_by(delays: pd.DataFrame, as_of) -> pd.DataFrame:
     """Expected observed-onset case counts per (location, week) that had reached the hub data by `as_of`.
 
@@ -133,7 +144,7 @@ def pseudo_vintage(delays: pd.DataFrame, final: pd.DataFrame, as_of) -> pd.DataF
     all cases (including those with imputed onset) to observed-onset cases, from `final`.
     """
     as_of = pd.Timestamp(as_of)
-    last_week = pd.Timestamp(reference_date_for(as_of.date()))
+    last_week = last_data_week(as_of)
     weeks = pd.date_range(C.OUTBREAK_START, last_week, freq="W-SAT")
     provs = sorted(delays["location"].unique())
     obs_final = delays.groupby(["location", "week"]).size()
@@ -162,6 +173,10 @@ def nowcast_vintages(target: pd.DataFrame, delays: pd.DataFrame, as_of) -> dict:
     if current is None:  # a backtest date between releases: the pseudo-vintage stands in for the data
         current = latest(target)[1]
     pseudo = pseudo_vintages(delays, current, as_of)
+    real_last, pseudo_last = current["date"].max(), pseudo[pd.Timestamp(as_of)]["date"].max()
+    if real_last != pseudo_last:
+        log.warning("Pseudo-vintages end on %s but the %s data end on %s: nowcast lags will be misaligned",
+                    pseudo_last.date(), pd.Timestamp(as_of).date(), real_last.date())
     if C.NOWCAST_SOURCE == "pseudo":
         # the newest version, which sets the "settled" values, is the real data where we have them
         return pseudo | ({pd.Timestamp(as_of): real[pd.Timestamp(as_of)]} if pd.Timestamp(as_of) in real else {})
