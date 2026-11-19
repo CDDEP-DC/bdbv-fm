@@ -62,13 +62,16 @@ to learn revision patterns from. Instead, `auxiliary-data/weekly-reporting-delay
 holds one row per case with its onset week and onset-to-report delay. From it, `data.py` rebuilds
 **pseudo-vintages**: the country and province counts as they would have stood on any past date.
 - Onset is taken as uniform within the week, and a case appears in the data 1.5 days after it is
-  reported.
-- Both choices were fit to the real releases of 2026-08-18 and 2026-10-09. A simpler "mid-week
-  onset" rule undercounted partial weeks by about 2×.
+  reported (3.5 days in Nord Kivu; see below).
+- Both choices were first fit to the real releases of 2026-08-18 and 2026-10-09. A simpler
+  "mid-week onset" rule undercounted partial weeks by about 2×.
 - The hub now archives each week's delay file (`auxiliary-data/archived-delay-data/`). Checked
-  against the 10-24, 11-01 and 11-08 snapshots, the pseudo-vintages match the observed-onset counts
-  to within 5% from one week back. In the newest week they are 5–25% too high. A 2-day lag fits
-  the snapshots better, but in `nowcast-test` it overcorrected the newest week, so 1.5 is kept.
+  against the 10-17 to 11-08 snapshots, the pseudo-vintages match the observed-onset counts in
+  Ituri and Haut Uele. But Nord Kivu's newest week held only 37–63% of the cases a 1.5-day lag
+  predicts. Its onset-to-report delays are the same as Ituri's (median 5 days), so the extra time
+  is in reaching the hub data. A per-province lag (`PIPELINE_LAG_BY_PROVINCE = {"CD-NK": 3.5}`,
+  fit to the snapshots) fixes it. A single 2-day lag for every province had instead overcorrected
+  the others.
 
 `nowcast.py` (adapted from flusight-fm) then learns, for each of the 5 most recent weeks:
 - the log revision as a robust regression on the report's log size, with province effects shrunk
@@ -88,18 +91,26 @@ CRPS (lower is better). Real releases are scored only on weeks at least 3 weeks 
 
 | | newest week | 1 week back | 2 weeks back |
 |---|---|---|---|
-| report as-is: pseudo-vintages (country + provinces) | 0.75 | 0.18 | 0.08 |
-| **nowcast: pseudo-vintages** | **0.18** | **0.12** | 0.08 |
-| report as-is: real releases (all levels) | 1.04 | 0.34 | 0.18 |
-| **nowcast: real releases** | **0.46** | **0.21** | **0.15** |
+| report as-is: pseudo-vintages (country + provinces) | 0.87 | 0.20 | 0.09 |
+| **nowcast: pseudo-vintages** | **0.25** | **0.13** | 0.08 |
+| report as-is: real releases (all levels) | 1.06 | 0.34 | 0.18 |
+| **nowcast: real releases** | **0.49** | **0.21** | **0.15** |
 
+- The Nord Kivu lag was judged on the real releases from 10-17 on, which are released like the
+  current Sunday data. On those, newest-week CRPS fell from 0.272 to 0.176 for provinces, from
+  0.070 to 0.059 for the country and from 0.404 to 0.400 for health zones. Count-scale CRPS over
+  all rows fell from 2.70 to 2.43. Province newest-week bias went from −0.41 to −0.03.
+- The real-release newest week in the table above rose from 0.46 to 0.49. Health zones in the two
+  early, irregular releases drive that rise: 08-18 was a Tuesday release, with a newest week only
+  3 days old. The pseudo-vintage rows changed because the vintages themselves changed with the
+  lag, so they are not a check on it.
 - For the country, on real releases, the newest week's error drops from a factor of about 12 to
-  about 40% (4 releases).
+  about 35% (4 releases).
 - `size+growth`, the model flusight-fm uses, scored slightly better on the country and provinces
   but much worse on health zones, whose week-over-week changes are mostly noise. That is why the
   default is `size`.
 - In-sample calibration under-covered out of sample, so the nowcast s.d. is scaled by 1.3.
-  On real releases, 90% intervals cover 80–90% for health zones but only 56–70% for provinces.
+  On real releases, 90% intervals cover 75–90% for health zones but only 61–78% for provinces.
 - On health zones, `parent_mult` cut CRPS one week back from 0.25 to 0.21 and improved it in
   every release tested.
 
@@ -217,6 +228,7 @@ example `nowcast_paths = 20` for a faster run. The ones that matter most:
 | `NOWCAST_MODEL` | `size` | revision model; compare with `bdbv nowcast-test` |
 | `NOWCAST_SD_SCALE` | 1.3 | widens nowcast intervals; check 90% coverage in `nowcast-test` |
 | `PIPELINE_LAG_DAYS` | 1.5 | report-to-data lag for pseudo-vintages; refit as real releases accumulate |
+| `PIPELINE_LAG_BY_PROVINCE` | `{"CD-NK": 3.5}` | per-province override, fit to the archived delay snapshots |
 | `NOWCAST_SOURCE` | `pseudo` | `both` scored worse on health zones (2026-11-19) |
 | `NOWCAST_HZ_SHIFT` | `parent_mult` | health zone shift from 1 week back (`NOWCAST_HZ_SHIFT_FROM_LAG`); `own` is the old rule |
 | `NOWCAST_FLOOR_LAGS` | 5 | weeks kept at or above the report; 2 lets older weeks revise down |
@@ -232,9 +244,12 @@ example `nowcast_paths = 20` for a faster run. The ones that matter most:
 - **`wk R_t` is not submitted.** The hub added an optional target on 2026-11-18: the effective
   reproduction number for the reference week, as 23 quantiles per location. It could be derived from
   the case trajectories with a renewal equation.
-- **Provinces' newest week runs low.** On real releases the log bias is −0.41 (18 values). This is
-  the largest remaining nowcast error.
-
+- **Health zones' newest week runs high in small zones.** The province size curve's low end, which
+  small zones are evaluated on, is pulled up by Nord Kivu's early small counts. On the 08-18 and
+  10-09 releases, newest-week CRPS rose from 0.535 to 0.619 with the Nord Kivu lag. Later
+  releases were unaffected. Watch this as releases accumulate.
+- **Per-province lags rest on 4 snapshots.** Refit `PIPELINE_LAG_BY_PROVINCE` as the hub archives
+  more delay files.
 - **Levels are not coherent.** Health zones don't sum to their province, nor provinces to the
   country. The hub doesn't require it, but reconciling them (e.g. scaling health zone samples to
   province samples) may score better.

@@ -106,7 +106,11 @@ REAL_REVISION_START = "2026-10-17"  # earliest real release used (the imputation
 REAL_SETTLE_WEEKS = 4       # a week serves as "final" once it is this many weeks old in the current release
 PIPELINE_LAG_DAYS = 1.5    # days from a case's report to its appearance in the hub data (fit to the real
                             # releases of 2026-08-18 and 2026-10-09; recheck as releases accumulate)
-PSEUDO_WEEKS = 20           # how many weekly pseudo-vintages to rebuild
+PIPELINE_LAG_BY_PROVINCE = {"CD-NK": 3.5}  # province code -> days, overriding PIPELINE_LAG_DAYS. Fit to the
+                            # archived delay snapshots of 10-17 to 11-08: Nord Kivu's newest week held only 37-63% of
+                            # the cases a 1.5-day lag predicts (its onset-to-report delays match Ituri's, so the extra
+                            # time is in reaching the hub data). Ituri and Haut Uele fit best at 1.5.
+PSEUDO_WEEKS = 20          # how many weekly pseudo-vintages to rebuild
 AS_OF_LAG_DAYS = 14         # backtests: days from the data's as_of to the reference date (2026-10-17 -> 10-31)
 REVISION_START = "2026-06-01"  # earliest data version used to learn revision patterns
 REVISION_WINDOW_WEEKS = 16  # ... and only the most recent this many weeks of versions (delays drift)

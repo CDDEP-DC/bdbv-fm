@@ -129,10 +129,12 @@ def known_by(delays: pd.DataFrame, as_of) -> pd.DataFrame:
     """Expected observed-onset case counts per (location, week) that had reached the hub data by `as_of`.
 
     Only the onset week is known, so onset is taken as equally likely on each of its 7 days, and a
-    case appears in the data PIPELINE_LAG_DAYS after it is reported. (Taking onset as mid-week instead
+    case appears in the data PIPELINE_LAG_DAYS after it is reported (PIPELINE_LAG_BY_PROVINCE overrides this
+    for some provinces). (Taking onset as mid-week instead
     badly undercounts partial weeks: checked against the real releases of 2026-08-18 and 2026-10-09.)
     """
-    k = (delays["week"] - pd.Timestamp(as_of)).dt.days + delays["delay"] + C.PIPELINE_LAG_DAYS
+    lag = delays["location"].map(C.PIPELINE_LAG_BY_PROVINCE).fillna(C.PIPELINE_LAG_DAYS).astype(float)
+    k = (delays["week"] - pd.Timestamp(as_of)).dt.days + delays["delay"] + lag
     p = np.clip(7 - k, 0, 7) / 7   # share of the week's onset days from which the case was in by as_of
     return p.groupby([delays["location"], delays["week"]]).sum().rename("n").reset_index()
 
